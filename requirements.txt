@@ -1,0 +1,7 @@
+boto3
+awscli
+pillow
+opencv-contrib-python
+paho-mqtt
+
+
