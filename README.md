@@ -39,7 +39,7 @@ on the raspberry pi to trigger each session.
 * [large pushbutton](https://www.amazon.com/Raspberry-Squid-Button-Twin-Pack/dp/B0170B75EU)
 
 ## Install
-Clone the trt_pose repo in this directory:
+Clone the trt_pose repo:
 ```
 git clone https://github.com/NVIDIA-AI-IOT/trt_pose.git
 ```
