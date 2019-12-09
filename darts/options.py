@@ -1,9 +1,14 @@
 import cv2
 import numpy as np
 
-save = False
+annotate = False
+teach = False
+save = True
+model = True
 k_size = 7
 history = 50
+Q_LEN = 100
+MAX_BLOBS = 5
 
 board_color = (132, 90, 205)
 bullseye_color = (0, 0, 255)

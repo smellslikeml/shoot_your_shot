@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 from __future__ import print_function
 import cv2
+import math
 import argparse
 import numpy as np
 import options as opt
 from time import time
+from collections import deque
 
 parser = argparse.ArgumentParser(description='This script uses motion detection to track darts.')
 parser.add_argument('--source', type=str, help='source uri', default='0')
@@ -42,6 +44,14 @@ w = h = s_config.offset
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
 
+if opt.annotate:
+    opt.model = True
+
+if opt.model:
+    from joblib import load
+    from skimage.feature import hog
+    clf = load('dart.dat')
+
 try:
     fps = cap.get(cv2.CAP_PROP_FPS)
     print('Camera supports {} FPS at {} x {}'.format(fps, width, height))
@@ -56,6 +66,34 @@ if not cap.isOpened:
 detector = cv2.SimpleBlobDetector_create(opt.params)
 backSub = cv2.createBackgroundSubtractorMOG2(history=opt.history)
 
+def cropFeature(im, dist):
+    im = cv2.resize(im, (200, 200))
+    fd, _ = hog(im, orientations=4, pixels_per_cell=(16, 16),
+                    cells_per_block=(1, 1), visualize=True, multichannel=True)
+    return np.concatenate((fd, np.expand_dims(dist, axis=0)))
+
+
+class DartBoard(object):
+    def __init__(self):
+        self.circle_q = deque(maxlen=opt.Q_LEN)
+
+    def update(self, center, radius):
+        self.center = center
+        self.radius = radius
+        if not math.isnan(radius):
+            self.circle_q.append(radius)
+
+    def get_smooth_radius(self):
+        mean_r = np.mean(self.circle_q)
+        if not math.isnan(mean_r):
+            return int(mean_r)
+        else:
+            return int(np.min((width, height)) / 2)
+
+        
+
+db = DartBoard()
+center = (width / 2, height / 2)
 while True:
     ret, frame = cap.read()
     ts = int(time() * 1000)
@@ -63,20 +101,16 @@ while True:
     if frame is None:
         break
     
-    fgMask = backSub.apply(frame)
-    
     ###################
     # Detect Motion
     ###################
 
+    fgMask = backSub.apply(frame)
     # filter shadows by thresholding mask
     ret, fgMask = cv2.threshold(fgMask, 150, 255, cv2.THRESH_BINARY)
     # smooth mask, close small blobs
     fgMask = cv2.morphologyEx(fgMask, cv2.MORPH_CLOSE, kernel, iterations=1)
-    # smooth mask, spread white area
-    #fgMask = cv2.blur(fgMask, k_tup)
-    # sharpen mask by thresholding
-    #ret, fgMask = cv2.threshold(fgMask, 100, 255, cv2.THRESH_BINARY)
+
 
     if np.mean(fgMask / 255) < 0.1:   # ignore large/rapid changes, filter camera obstruction
 
@@ -85,7 +119,9 @@ while True:
         #########################
 
         keypoints = detector.detect(fgMask)
-        circles = cv2.HoughCircles(fgMask, cv2.HOUGH_GRADIENT, 1, 70, 
+        
+        blur = cv2.cvtColor(cv2.blur(frame, k_tup), cv2.COLOR_BGR2GRAY)
+        circles = cv2.HoughCircles(blur, cv2.HOUGH_GRADIENT, 1, height / 8, 
                                    param1=50, param2=25, 
                                    minRadius=s_config.l_cir, maxRadius=s_config.h_cir)
          
@@ -96,23 +132,48 @@ while True:
         # Convert to color images
         im_with_keypoints = cv2.cvtColor(fgMask, cv2.COLOR_GRAY2BGR)
 
-        # Iterate through Keypoints
-        for kp in keypoints:
-            tup = tuple(map(int, kp.pt))
+        # Iterate through Keypoints (but not too many)
+        if len(keypoints) < opt.MAX_BLOBS:    
+            for kp in keypoints:
+                tup = tuple(map(int, kp.pt))
+                disp = np.array(tup) - np.array(center)
+                theta = np.round(np.arctan(disp[1] / (disp[0] + 1e-3)), 2)
 
-            try:
-                xx, yy = center
-                x, y = tup
+                try:
+                    xx, yy = center
+                    x, y = tup
+                    
+                    dist = np.linalg.norm(disp)
+                    rad = np.round(dist / db.get_smooth_radius(), 2)
 
-                # Constrain to Keypoints Near Dartboard
-                dist = np.linalg.norm(np.array(center) - np.array(tup))
-                if s_config.c_radius is not None and dist  < 1.1 * s_config.c_radius:
-                    print('dart position: ', tup)
-                    dart_crop = frame[y-h:y+h,x-w:x+w,:]
-            except NameError:
-                pass
+                    # Constrain to Keypoints Near Dartboard
+                    if rad  < 1.1 * db.get_smooth_radius():
+                        print('dart position: ', tup)
+                        dart_crop = frame[y-h:y+h,x-w:x+w,:]
+                        if opt.teach:
+                            score = input('Please Enter the Score using keys: 0-6: ')
+                            print('Dart Score: {}'.format(int(score) * 5 if int(score) < 6 else 50))
+                            crop_path = "crops/{}/{}_{}_{}_{}.png".format(score, ts, theta, rad)
+                        else:
+                            crop_path = "crops/{}_{}_{}.png".format(ts, theta, rad)
+                        if opt.model:
+                            try:
+                                ft_vec = cropFeature(dart_crop, dist)
+                                pred = int(clf.predict(np.expand_dims(ft_vec, axis=0))[0])
+                                points = 5 * pred if pred < 6 else 50
+                                print('Estimated Score: {}'.format(points))
+                                if opt.annotate:
+                                    f = frame.copy()
+                                    if points:
+                                        cv2.putText(f, '+{} pts'.format(points), tup, cv2.FONT_HERSHEY_SIMPLEX, 1, (128, 128, 200), 2)
+                                        cv2.imwrite("bg/{}_ann.png".format(ts), f)
+                            except:
+                                pass
+                            
+                except NameError:
+                    pass
 
-            im_with_keypoints = cv2.circle(im_with_keypoints, tup, 40, opt.dart_color, 2)
+                im_with_keypoints = cv2.circle(im_with_keypoints, tup, 40, opt.dart_color, 2)
 
         if keypoints:
             try:
@@ -120,8 +181,8 @@ while True:
                     circles = np.uint16(np.around(circles))
                     center = [(i[0], i[1]) for i in circles[0,:]]
                     center = tuple(np.mean(center, axis=0).astype(int))
-                    s_config.c_radius = circles[0][0][2]
-                    im_with_keypoints = cv2.circle(im_with_keypoints, center, s_config.c_radius, opt.board_color, 5)
+                    db.update(center, circles[0][0][2])
+                    im_with_keypoints = cv2.circle(im_with_keypoints, center, db.get_smooth_radius(), opt.board_color, 5)
                     im_with_keypoints = cv2.drawMarker(im_with_keypoints, center, opt.bullseye_color, 0, 30, 4)
 
 
@@ -129,10 +190,15 @@ while True:
                 if opt.save:
                     cv2.imwrite("bg/{}_blk.png".format(ts), im_with_keypoints)
                     cv2.imwrite("bg/{}_raw.png".format(ts), frame)
-                    cv2.imwrite("crops/{}_{}_{}_{}_{}.png".format(ts, x, y, xx, yy), dart_crop)
+                    cv2.imwrite(crop_path, dart_crop)
 
             except NameError:
                 pass
+        try:
+            im_with_keypoints = cv2.circle(im_with_keypoints, center, db.get_smooth_radius(), opt.board_color, 5)
+            im_with_keypoints = cv2.drawMarker(im_with_keypoints, center, opt.bullseye_color, 0, 30, 4)
+        except:
+            pass
 
         try:
             # Display Detection/Annotation
