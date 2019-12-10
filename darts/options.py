@@ -26,8 +26,8 @@ class SourceConfig(object):
         self.width = width
         self.height = height
         self.min_len = np.min((width, height))
-        self.h_cir = int(1.1 *  self.min_len // 2)
-        self.l_cir = int(0.7 * self.min_len // 2)
+        self.h_cir = int(0.5 *  self.min_len // 2)
+        self.l_cir = int(0.3 * self.min_len // 2)
         self.offset = self.min_len // 10
         self.c_radius = None
 
