@@ -70,8 +70,8 @@ detector = cv2.SimpleBlobDetector_create(opt.params)
 backSub = cv2.createBackgroundSubtractorMOG2(history=opt.history)
 
 def cropFeature(im, dist):
-    im = cv2.resize(im, (200, 200))
-    fd, _ = hog(im, orientations=4, pixels_per_cell=(16, 16),
+    im = cv2.resize(im, (50, 50))
+    fd, hog_image = hog(im, orientations=8, pixels_per_cell=(8, 8),
                     cells_per_block=(1, 1), visualize=True, multichannel=True)
     return np.concatenate((fd, np.expand_dims(dist, axis=0)))
 
@@ -169,7 +169,7 @@ while True:
                     crop_path = "crops/{}_{}_{}_{}_{}_{}.png".format(ts, theta, rad, xx, yy, R)
                     if opt.model:
                         try:
-                            ft_vec = cropFeature(dart_crop, dist)
+                            ft_vec = cropFeature(dart_crop, rad)
                             pred = int(clf.predict(np.expand_dims(ft_vec, axis=0))[0])
                             points = 5 * pred if pred < 6 else 50
                             print('Estimated Score: {}'.format(points))
