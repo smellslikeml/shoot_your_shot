@@ -7,6 +7,7 @@ import numpy as np
 import options as opt
 from time import time
 from collections import deque
+from skimage.feature import blob_doh
 
 parser = argparse.ArgumentParser(description='This script uses motion detection to track darts.')
 parser.add_argument('--source', type=str, help='source uri', default='0')
@@ -25,6 +26,9 @@ if args.quality != 'raw':
     # MJPEG compression
     fourcc = cv2.VideoWriter_fourcc(*'MJPG')
     cap.set(cv2.CAP_PROP_FOURCC, fourcc)
+else:
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    cap.set(cv2.CAP_PROP_FOURCC, fourcc)
 
 # Set up parameters based on camera specs
 # To check, run: v4l2-ctl --list-formats-ext --device /dev/video0
@@ -38,14 +42,13 @@ elif args.quality == 'low':  # 120 fps
     width = 640
     height = 480
 
-s_config = opt.SourceConfig(width, height)
-w = h = s_config.offset
 
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+out = cv2.VideoWriter('darts.mp4', fourcc, 20.0, (width, height))
 
-if opt.annotate:
-    opt.model = True
+s_config = opt.SourceConfig(width, height)
+w = h = s_config.offset
 
 if opt.model:
     from joblib import load
@@ -135,47 +138,50 @@ while True:
         circles = cv2.HoughCircles(blur, cv2.HOUGH_GRADIENT, 1, height / 8, 
                                    param1=50, param2=25, 
                                    minRadius=s_config.l_cir, maxRadius=s_config.h_cir)
-         
+
+        blobs = blob_doh(fgMask, min_sigma=40, max_sigma=100, num_sigma=2, threshold=0.02)
+        blob_kps = [tuple(map(int, blob[:2])) for blob in blobs]
+        if len(keypoints) < opt.MAX_BLOBS:    
+            blob_kps += [tuple(map(int, kp.pt)) for kp in keypoints]
+
         #################
         # Filter/Annotate
         #################
         img = imgObj(frame.copy())
 
         # Iterate through Keypoints (but not too many)
-        if len(keypoints) < opt.MAX_BLOBS:    
-            for kp in keypoints:
-                tup = tuple(map(int, kp.pt))
-                disp = np.array(tup) - np.array(center)
-                theta = np.round(np.arctan(disp[1] / (disp[0] + 1e-3)), 2)
+        for tup in blob_kps:
+            disp = np.array(tup) - np.array(center)
+            theta = np.round(np.arctan(disp[1] / (disp[0] + 1e-3)), 2)
 
-                try:
-                    xx, yy = center
-                    x, y = tup
-                    
-                    dist = np.linalg.norm(disp)
-                    R = db.get_smooth_radius()
-                    rad = np.round(dist / R, 2)
+            try:
+                xx, yy = center
+                x, y = tup
+                
+                dist = np.linalg.norm(disp)
+                R = db.get_smooth_radius()
+                rad = np.round(dist / R, 2)
 
-                    # Constrain to Keypoints Near Dartboard
-                    if rad  < R:
-                        print('dart position: ', tup)
-                        dart_crop = frame[y-h:y+h,x-w:x+w,:]
-                        crop_path = "crops/{}_{}_{}.png".format(ts, theta, rad)
-                        if opt.model:
-                            try:
-                                ft_vec = cropFeature(dart_crop, dist)
-                                pred = int(clf.predict(np.expand_dims(ft_vec, axis=0))[0])
-                                points = 5 * pred if pred < 6 else 50
-                                print('Estimated Score: {}'.format(points))
-                                if points:
-                                    img.addPts(points, tup)
-                            except:
-                                pass
-                            
-                except NameError:
-                    pass
+                # Constrain to Keypoints Near Dartboard
+                if rad  < 1.1 * R:
+                    print('dart position: ', tup)
+                    dart_crop = frame[y-h:y+h,x-w:x+w,:]
+                    crop_path = "crops/{}_{}_{}_{}_{}_{}.png".format(ts, theta, rad, xx, yy, R)
+                    if opt.model:
+                        try:
+                            ft_vec = cropFeature(dart_crop, dist)
+                            pred = int(clf.predict(np.expand_dims(ft_vec, axis=0))[0])
+                            points = 5 * pred if pred < 6 else 50
+                            print('Estimated Score: {}'.format(points))
+                            if points:
+                                img.addPts(points, tup)
+                                img.im = cv2.circle(img.im, tup, 40, opt.dart_color, 2)
+                        except:
+                            pass
+                        
+            except NameError:
+                pass
 
-                img.im = cv2.circle(img.im, tup, 40, opt.dart_color, 2)
 
         if keypoints:
             try:
@@ -206,6 +212,7 @@ while True:
         try:
             # Display Detection/Annotation
             cv2.imshow("ShootYourShot", img.im)
+            out.write(img.im)
         except:
             pass
 
