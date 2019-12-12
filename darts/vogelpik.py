@@ -6,8 +6,8 @@ import argparse
 import numpy as np
 import options as opt
 from time import time
-from collections import deque
 from skimage.feature import blob_doh
+from collections import deque, defaultdict
 
 parser = argparse.ArgumentParser(description='This script uses motion detection to track darts.')
 parser.add_argument('--source', type=str, help='source uri', default='0')
@@ -69,6 +69,11 @@ if not cap.isOpened:
 detector = cv2.SimpleBlobDetector_create(opt.params)
 backSub = cv2.createBackgroundSubtractorMOG2(history=opt.history)
 
+def point_bin(point, bins):
+    x, y = point
+    x, y = bins * np.array((x / height, 2 * y / width))
+    return tuple(map(int, (x, y)))
+
 def cropFeature(im, dist):
     im = cv2.resize(im, (50, 50))
     fd, hog_image = hog(im, orientations=8, pixels_per_cell=(8, 8),
@@ -105,8 +110,13 @@ class imgObj(object):
         cv2.imwrite(img_path, self.im)
 
         
-center = (width / 2, height / 2)
 db = DartBoard()
+sbf = deque(maxlen=5)
+scores = defaultdict()
+
+
+bins = 8
+center = (width / 2, height / 2)
 
 while True:
     ret, frame = cap.read()
@@ -149,7 +159,8 @@ while True:
         #################
         img = imgObj(frame.copy())
 
-        # Iterate through Keypoints (but not too many)
+        # Iterate through Keypoints 
+        loc = np.zeros((bins, 2 * bins))
         for tup in blob_kps:
             disp = np.array(tup) - np.array(center)
             theta = np.round(np.arctan(disp[1] / (disp[0] + 1e-3)), 2)
@@ -176,12 +187,27 @@ while True:
                             if points:
                                 img.addPts(points, tup)
                                 img.im = cv2.circle(img.im, tup, 40, opt.dart_color, 2)
+                                pt = point_bin((x, y), bins=bins)
+                                loc[pt] += 1
+                                if isinstance(scores.get(pt), deque):
+                                    scores[pt].append(points)
+                                else:
+                                    scores[pt] = deque(maxlen=5)
+
                         except:
                             pass
                         
             except NameError:
                 pass
 
+        sbf.append((loc>0).astype(np.uint8))
+        L = list(zip(*np.where(np.sum(np.array(sbf), axis=0) > 1)))
+        for pp in L:
+            print(pp)
+            try:
+                print('Median scores for region', np.median(scores[pp]))
+            except:
+                pass
 
         if keypoints:
             try:
@@ -193,7 +219,6 @@ while True:
 
                     for circle in circles[0][0]:
                         db.update(center, circle)
-
                 # Saving Images
                 if opt.save:
                     cv2.imwrite("bg/{}_raw.png".format(ts), frame)
@@ -219,3 +244,5 @@ while True:
     keyboard = cv2.waitKey(30)
     if keyboard == 'q' or keyboard == 27:
         break
+
+
