@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 from __future__ import print_function
 import cv2
 import math
@@ -109,6 +109,38 @@ class imgObj(object):
     def writeImg(self, img_path):
         cv2.imwrite(img_path, self.im)
 
+class TrackableObject(object):
+    def __init__(self, frame, initBB, label=None, prob=None):
+        self.count = 0
+        self.box = initBB
+        self.label = label 
+        self.prob = prob
+        self.stationary = False
+        self.tracker = cv2.TrackerCSRT_create()
+        self.tracker.init(frame, initBB)
+        self.id = np.random.randint(1000)
+        self.history = []
+        self.counted = False
+        self.stationary_cnt = 0
+
+    def update(self, frame):
+        x1 = np.array(self.get_centroid())
+        self.success, self.box = self.tracker.update(frame)
+        x2 = np.array(self.get_centroid())
+        if np.linalg.norm(x1 - x2) < 5:
+            self.stationary_cnt += 1
+            if self.stationary_cnt > 2:
+                self.stationary = True
+        self.count += 1
+        return self.success, self.box
+
+    def get_centroid(self):
+        (x, y, w, h) = [int(v) for v in self.box]
+        self.centroid = tuple(map(int, [(x + w / 2), (y + h / 2)]))
+        self.history.append(self.centroid)
+        return self.centroid
+
+
         
 db = DartBoard()
 sbf = deque(maxlen=5)
@@ -116,6 +148,7 @@ scores = defaultdict()
 
 
 bins = 8
+initBB = None
 center = (width / 2, height / 2)
 
 while True:
@@ -205,7 +238,12 @@ while True:
         for pp in L:
             print(pp)
             try:
-                print('Median scores for region', np.median(scores[pp]))
+                smooth_score = np.median(scores[pp])
+                initBB = x - 50, y - 50, 100, 100
+                tracker = TrackableObject(img.im, initBB)
+                #tracker.init(img.im, initBB)
+                tracker.label = smooth_score
+                print('Median scores for region', smooth_score)
             except:
                 pass
 
@@ -221,10 +259,13 @@ while True:
                         db.update(center, circle)
                 # Saving Images
                 if opt.save:
-                    cv2.imwrite("bg/{}_raw.png".format(ts), frame)
-                    cv2.imwrite(crop_path, dart_crop)
+                    try:
+                        img.writeImg("bg/{}_ann.png".format(ts))
+                        cv2.imwrite("bg/{}_raw.png".format(ts), frame)
+                        cv2.imwrite(crop_path, dart_crop)
 
-                    img.writeImg("bg/{}_ann.png".format(ts))
+                    except:
+                        pass
 
             except NameError:
                 pass
@@ -235,6 +276,16 @@ while True:
             pass
 
         try:
+            if initBB is not None:
+                # grab the new bounding box coordinates of the object
+                (success, box) = tracker.update(img.im)
+                if success:
+                    tracker_color = (100, 100, 200)
+                    (c1, c2, l1, l2) = [int(v) for v in box]
+                    cv2.rectangle(img.im, (c1, c2), (c1 + l1, c2 + l2),
+                            tracker_color, 3)
+                    cv2.putText(img.im, '{}'.format(tracker.label), (c1, c2), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, tracker_color, 2)
             # Display Detection/Annotation
             cv2.imshow("ShootYourShot", img.im)
             out.write(img.im)
