@@ -11,6 +11,7 @@ MAX_BLOBS = 7
 board_color = (132, 90, 205)
 bullseye_color = (0, 0, 255)
 dart_color = (255, 255, 0)
+tracker_color = (200, 162, 200)
 white_blob = (100, 200, 100)
 
 params = cv2.SimpleBlobDetector_Params()

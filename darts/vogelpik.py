@@ -45,7 +45,11 @@ elif args.quality == 'low':  # 120 fps
 
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-out = cv2.VideoWriter('darts.mp4', fourcc, 20.0, (width, height))
+
+out = cv2.VideoWriter('darts.mp4', 
+        cv2.VideoWriter_fourcc(*'mp4v'), 
+        20.0, 
+        (width, height))
 
 s_config = opt.SourceConfig(width, height)
 w = h = s_config.offset
@@ -64,10 +68,6 @@ except:
 if not cap.isOpened:
     print('Unable to open: ' + args.input)
     exit(0)
-
-# Initialize detectors
-detector = cv2.SimpleBlobDetector_create(opt.params)
-backSub = cv2.createBackgroundSubtractorMOG2(history=opt.history)
 
 def point_bin(point, bins):
     x, y = point
@@ -101,10 +101,14 @@ class DartBoard(object):
 class imgObj(object):
     def __init__(self, im):
         self.im = im
+        self.bullseye = deque(maxlen=100)
 
     def addPts(self, points, center):
         cv2.putText(self.im, '+{} pts'.format(points), center, 
                 cv2.FONT_HERSHEY_SIMPLEX, 1, (128, 128, 200), 2)
+
+    def updateBullseye(self, center):
+        self.bullseye.append(center)
 
     def writeImg(self, img_path):
         cv2.imwrite(img_path, self.im)
@@ -142,8 +146,13 @@ class TrackableObject(object):
 
 
         
+# Initialize detectors
+detector = cv2.SimpleBlobDetector_create(opt.params)
+backSub = cv2.createBackgroundSubtractorMOG2(history=opt.history)
+
 db = DartBoard()
 sbf = deque(maxlen=5)
+trackers = deque(maxlen=4)
 scores = defaultdict()
 
 
@@ -236,14 +245,16 @@ while True:
         sbf.append((loc>0).astype(np.uint8))
         L = list(zip(*np.where(np.sum(np.array(sbf), axis=0) > 1)))
         for pp in L:
-            print(pp)
             try:
+                xx, yy = pp
+                xx, yy = np.array((height * xx, width * yy / 2)) / bins
+                margin = 10
                 smooth_score = np.median(scores[pp])
-                initBB = x - 50, y - 50, 100, 100
+                initBB = xx - margin, yy - margin, 2 * margin, 2 * margin 
                 tracker = TrackableObject(img.im, initBB)
-                #tracker.init(img.im, initBB)
                 tracker.label = smooth_score
-                print('Median scores for region', smooth_score)
+                print('Median score of {} for region {}'.format(smooth_score, pp))
+                trackers.append(tracker)
             except:
                 pass
 
@@ -254,6 +265,7 @@ while True:
 
                     center = [(i[0], i[1]) for i in circles[0,:]]
                     center = tuple(np.mean(center, axis=0).astype(int))
+                    img.updateBullseye(center)
 
                     for circle in circles[0][0]:
                         db.update(center, circle)
@@ -263,29 +275,32 @@ while True:
                         img.writeImg("bg/{}_ann.png".format(ts))
                         cv2.imwrite("bg/{}_raw.png".format(ts), frame)
                         cv2.imwrite(crop_path, dart_crop)
-
                     except:
                         pass
 
             except NameError:
                 pass
         try:
-            img.im = cv2.circle(img.im, center, db.get_smooth_radius(), opt.board_color, 5)
-            img.im = cv2.drawMarker(img.im, center, opt.bullseye_color, 0, 30, 4)
-        except:
+            cc = tuple(map(lambda y: sum(y) / float(len(y)), zip(*list(img.bullseye))))
+            if not cc:
+                cc = center
+            cc = tuple(map(int, cc))
+            img.im = cv2.circle(img.im, cc, db.get_smooth_radius(), opt.board_color, 5)
+            img.im = cv2.drawMarker(img.im, cc, opt.bullseye_color, 0, 30, 4)
+        except IndexError:
             pass
 
         try:
             if initBB is not None:
                 # grab the new bounding box coordinates of the object
-                (success, box) = tracker.update(img.im)
-                if success:
-                    tracker_color = (100, 100, 200)
-                    (c1, c2, l1, l2) = [int(v) for v in box]
-                    cv2.rectangle(img.im, (c1, c2), (c1 + l1, c2 + l2),
-                            tracker_color, 3)
-                    cv2.putText(img.im, '{}'.format(tracker.label), (c1, c2), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 1, tracker_color, 2)
+                for tracker in trackers:
+                    (success, box) = tracker.update(img.im)
+                    if success:
+                        cv2.putText(img.im, '{}'.format(int(tracker.label)), tracker.get_centroid(),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1, opt.tracker_color, 2)
+                        #(c1, c2, l1, l2) = [int(v) for v in box]
+                        #cv2.rectangle(img.im, (c1, c2), (c1 + l1, c2 + l2),
+                        #        opt.tracker_color, 3)
             # Display Detection/Annotation
             cv2.imshow("ShootYourShot", img.im)
             out.write(img.im)
