@@ -4,6 +4,9 @@
 
 A weekend hackathon project to build a smart dart application. This demo uses two cameras to view the thrower and view the dartboard and track poses and dart placement.
 
+![Shoot Your Shot](throw_it.gif)
+
+
 ## Getting started
 You can run the pose demo in the pose directory by running
 ```
