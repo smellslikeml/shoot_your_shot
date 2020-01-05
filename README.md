@@ -1,5 +1,7 @@
 # Shoot your shot!
 
+![Shoot Your Shot](shoot_it.gif)
+
 A weekend hackathon project to build a smart dart application. This demo uses two cameras to view the thrower and view the dartboard and track poses and dart placement.
 
 ## Getting started
